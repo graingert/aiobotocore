@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import ssl
 
 import anyio
@@ -11,12 +12,14 @@ TARGET_HOST = "localhost"
 RESPONSE_BODY = b'{"ok": true}'
 
 
-async def handle_target(stream) -> None:
+async def handle_target(stream, request_lines=None) -> None:
     """Serve one minimal HTTP/1.1 request over an accepted stream."""
     try:
         buf = b""
         while b"\r\n\r\n" not in buf:
             buf += await stream.receive()
+        if request_lines is not None:
+            request_lines.append(buf.split(b"\r\n", 1)[0])
         await stream.send(
             b"HTTP/1.1 200 OK\r\n"
             b"Content-Length: %d\r\n"
@@ -42,7 +45,12 @@ async def handle_target(stream) -> None:
 
 
 async def serve_https_target(
-    ca, *, hostname=TARGET_HOST, client_ca=None, task_status
+    ca,
+    *,
+    hostname=TARGET_HOST,
+    client_ca=None,
+    request_lines=None,
+    task_status,
 ) -> None:
     server_cert = ca.issue_cert(hostname)
     ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
@@ -57,13 +65,17 @@ async def serve_https_target(
     async with listener:
         port = listener.extra(SocketAttribute.local_port)
         task_status.started(port)
-        await TLSListener(listener, ssl_context).serve(handle_target)
+        await TLSListener(listener, ssl_context).serve(
+            functools.partial(handle_target, request_lines=request_lines)
+        )
 
 
-def prepared_request(port: int, host: str = TARGET_HOST) -> AWSRequest:
+def prepared_request(
+    port: int, host: str = TARGET_HOST, path: str = "/foo?id=1"
+) -> AWSRequest:
     request = AWSRequest(
         method="GET",
-        url=f"https://{host}:{port}/foo?id=1",
+        url=f"https://{host}:{port}{path}",
         headers={"Accept": "application/json"},
     ).prepare()
     request.stream_output = False
