@@ -218,6 +218,9 @@ docs = "uv run --group docs sphinx-build -W -b html docs docs/_build/html"
 # backends; CI overrides it to aiohttp on the no-httpx job.
 # No --reruns: retrying hides flakes instead of fixing them, and doubles the
 # cost of every failure. Nothing is marked flaky, so nothing needs it.
+# No PYTHONTRACEMALLOC here: tracing 5 frames per allocation made the suite ~3x
+# slower (see aio-libs/aiobotocore#1689). Set it when hunting a leak, or use
+# ``vtest``.
 # ``worksteal`` rather than the default ``load``: the server-heavy tests sort
 # late, so load hands them out together and the last 10% of the suite takes
 # ~44% of the wall clock -- with every expensive test running at once, which is
@@ -229,7 +232,7 @@ mototest.cmd = """
 """
 # COV_ARGS is emptied by CI on the jobs that do not report coverage; measuring
 # it on every interpreter costs ~20% for a near-identical report.
-mototest.env = { HTTP_BACKEND.default = "all", PYTHONTRACEMALLOC = "5", PYTHONFAULTHANDLER = "1", COV_ARGS.default = "--cov --cov-report=term --cov-report=xml" }
+mototest.env = { HTTP_BACKEND.default = "all", PYTHONFAULTHANDLER = "1", COV_ARGS.default = "--cov --cov-report=term --cov-report=xml" }
 
 clean.shell = "git clean -Xdf"
 
