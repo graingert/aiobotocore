@@ -105,3 +105,30 @@ def test_proxy_connect_does_not_reuse_raw_endpoint_target():
     assert endpoint.url.target == b'https://example.com/a/../b'
     assert connect.url.target == b'example.com:443'
     assert connect.extensions['timeout']['connect'] == 1
+
+
+def test_proxy_connect_does_not_copy_raw_endpoint_target():
+    """httpcore may copy the extensions by iterating rather than sharing them."""
+    core = importlib.import_module(
+        "httpcore" if _httpx.HTTPX_IS_LEGACY else "httpcore2"
+    )
+    extensions = _ProxyTargetExtensions(
+        {'timeout': {'connect': 1}}, b'https://example.com/a/../b'
+    )
+    endpoint = core.Request(
+        b'GET', b'https://example.com/', extensions=extensions
+    )
+    connect = core.Request(
+        b'CONNECT',
+        core.URL(
+            scheme=b'http',
+            host=b'proxy',
+            port=80,
+            target=b'example.com:443',
+        ),
+        extensions={key: value for key, value in extensions.items()},
+    )
+
+    assert endpoint.url.target == b'https://example.com/a/../b'
+    assert connect.url.target == b'example.com:443'
+    assert connect.extensions == {'timeout': {'connect': 1}}

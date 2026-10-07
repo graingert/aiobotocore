@@ -56,9 +56,11 @@ class _ProxyTargetExtensions(dict):
     """Apply the raw target to the endpoint request, but not CONNECT.
 
     HTTPcore constructs the endpoint request first and then reuses its
-    extensions when constructing CONNECT. Its ``Request`` checks for target
-    once during construction, so exposing it only on the first check keeps the
-    raw S3 path on the endpoint request without replacing CONNECT's authority.
+    extensions when constructing CONNECT, either sharing the object or copying
+    it by iterating ``items()``. Its ``Request`` checks for target once during
+    construction, so exposing it only on the first check, and hiding it from
+    iteration afterwards, keeps the raw S3 path on the endpoint request without
+    replacing CONNECT's authority.
     """
 
     def __init__(self, extensions: dict, target: bytes):
@@ -71,6 +73,21 @@ class _ProxyTargetExtensions(dict):
                 return False
             self._target_applied = True
         return super().__contains__(key)
+
+    def __iter__(self):
+        return (key for key in super().__iter__() if self._is_visible(key))
+
+    def keys(self):
+        return list(iter(self))
+
+    def items(self):
+        return [(key, self[key]) for key in self]
+
+    def values(self):
+        return [self[key] for key in self]
+
+    def _is_visible(self, key):
+        return not (key == 'target' and self._target_applied)
 
 
 if httpx is not None:
