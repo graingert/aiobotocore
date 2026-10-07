@@ -9,6 +9,7 @@ httpx on asyncio and trio).
 
 from __future__ import annotations
 
+import functools
 import json
 import ssl
 import sys
@@ -241,6 +242,37 @@ async def test_https_request_through_http_proxy(
             assert json.loads(await response.content) == {"ok": True}
 
         tg.cancel_scope.cancel()
+
+
+async def test_https_request_through_http_proxy_keeps_raw_path(
+    http_session_cls, ca, ca_bundle
+):
+    # S3 keys may contain dot segments, so the path must reach the target
+    # unnormalized, while the proxy still gets a host:port CONNECT.
+    request_lines = []
+    async with anyio.create_task_group() as tg:
+        proxy_port = await tg.start(_serve_http_proxy)
+        target_port = await tg.start(
+            functools.partial(
+                serve_https_target, ca, request_lines=request_lines
+            )
+        )
+
+        async with http_session_cls(
+            proxies={"https": f"http://127.0.0.1:{proxy_port}"},
+            verify=ca_bundle,
+        ) as session:
+            response = await session.send(
+                prepared_request(target_port, path="/a/../b//c/./d?id=1")
+            )
+            assert response.status_code == 200
+
+        tg.cancel_scope.cancel()
+
+    assert len(request_lines) == 1
+    method, target, _ = request_lines[0].split(b" ")
+    assert method == b"GET"
+    assert target.endswith(b"/a/../b//c/./d?id=1")
 
 
 async def test_https_request_through_https_proxy(
