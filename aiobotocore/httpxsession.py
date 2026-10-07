@@ -52,58 +52,34 @@ _LEGACY_HTTPX_WARNED = False
 _RAW_PROXY_TARGET = 'aiobotocore_raw_proxy_target'
 
 
-class _ProxyTargetExtensions(dict):
-    """Apply the raw target to the endpoint request, but not CONNECT.
-
-    HTTPcore constructs the endpoint request first and then reuses its
-    extensions when constructing CONNECT, either sharing the object or copying
-    it by iterating ``items()``. Its ``Request`` checks for target once during
-    construction, so exposing it only on the first check, and hiding it from
-    iteration afterwards, keeps the raw S3 path on the endpoint request without
-    replacing CONNECT's authority.
-    """
-
-    def __init__(self, extensions: dict, target: bytes):
-        super().__init__(extensions, target=target)
-        self._target_applied = False
-
-    def __contains__(self, key):
-        if key == 'target':
-            if self._target_applied:
-                return False
-            self._target_applied = True
-        return super().__contains__(key)
-
-    def __iter__(self):
-        return (key for key in super().__iter__() if self._is_visible(key))
-
-    def keys(self):
-        return list(iter(self))
-
-    def items(self):
-        return [(key, self[key]) for key in self]
-
-    def values(self):
-        return [self[key] for key in self]
-
-    def _is_visible(self, key):
-        return not (key == 'target' and self._target_applied)
-
-
 if httpx is not None:
 
-    class _ProxyTargetTransport(httpx.AsyncHTTPTransport):
+    class _RawProxyTargetPool:
+        """Give the endpoint request botocore's unnormalized URL.
+
+        httpcore's ``target`` extension would also be applied to the requests
+        its proxy connections build from the endpoint request (CONNECT and
+        forwarded requests), so the raw URL is set on the endpoint request
+        itself, before the request reaches httpcore's proxy pool. httpcore's
+        ``URL`` splits it without normalizing the path.
+        """
+
+        def __init__(self, pool):
+            self._pool = pool
+
         async def handle_async_request(self, request):
-            target = request.extensions.pop(_RAW_PROXY_TARGET, None)
-            if target is not None:
-                # This is the last layer before HTTPcore constructs its
-                # endpoint Request, followed by its CONNECT Request. Preserve
-                # timeout and other HTTPX extensions while exposing target to
-                # the first construction only.
-                request.extensions = _ProxyTargetExtensions(
-                    request.extensions, target
-                )
-            return await super().handle_async_request(request)
+            raw_url = request.extensions.pop(_RAW_PROXY_TARGET, None)
+            if raw_url is not None:
+                request.url = type(request.url)(raw_url)
+            return await self._pool.handle_async_request(request)
+
+        def __getattr__(self, name):
+            return getattr(self._pool, name)
+
+    class _ProxyTargetTransport(httpx.AsyncHTTPTransport):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self._pool = _RawProxyTargetPool(self._pool)
 
 
 def _find_ssl_error(exc: BaseException) -> ssl.SSLError | None:
